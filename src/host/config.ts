@@ -56,6 +56,11 @@ export interface Config {
   unitCacheTtlMs?: number
   /** Register model-facing `univer_*` tools. */
   tools?: boolean
+  /**
+   * Ask the user before each `univer_execute` call. Facade code runs unsandboxed in a Node.js
+   * worker with the Host user's privileges, so disable this only for trusted automation.
+   */
+  executeApproval?: boolean
   /** Register version-matched bundled Univer skills. */
   skills?: boolean
   /** Send anonymous product telemetry; `DO_NOT_TRACK` also turns it off. */
@@ -84,6 +89,7 @@ export interface ResolvedConfig {
   readonly stateCacheTtlMs: number
   readonly unitCacheTtlMs: number
   readonly tools: boolean
+  readonly executeApproval: boolean
   readonly skills: boolean
   readonly telemetry: boolean
 }
@@ -123,6 +129,7 @@ export const Config: z<Config> = z.object({
   stateCacheTtlMs: z.natural().default(1_000),
   unitCacheTtlMs: z.natural().default(5_000),
   tools: z.boolean().default(true),
+  executeApproval: z.boolean().default(true),
   skills: z.boolean().default(true),
   telemetry: z.boolean().default(true)
 })
@@ -151,6 +158,7 @@ export function resolveConfig(config: Config = {}): ResolvedConfig {
     stateCacheTtlMs: config.stateCacheTtlMs ?? 1_000,
     unitCacheTtlMs: config.unitCacheTtlMs ?? 5_000,
     tools: config.tools ?? true,
+    executeApproval: config.executeApproval ?? true,
     skills: config.skills ?? true,
     telemetry: config.telemetry ?? true
   }

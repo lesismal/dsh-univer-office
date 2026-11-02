@@ -308,9 +308,13 @@ Viewer 面由插件挂载在 DSH WebServer origin 上：`/univer-viewer` 前缀�
 资源，`/uf` 前缀承载 Gateway 领域 API，`/univer-viewer/ws` 是 WebSocket 隧道（`?target=` 携带
 动态上游路径，因 DSH upgrade 注册只支持精确路径）。代理逐请求先通过 DSH `connection` 服务的
 信任门（Host/Origin fence 与浏览器鉴权）。Viewer 文档请求仍解码 fileKey 并验证其落在指定
-live session 的 `cwd` 内；后续 `/uf` 与隧道请求不设置或读取插件会话 cookie，也不重复 workspace
-范围校验，以兼容桌面壳删除 Set-Cookie、替换请求 cookie 的转发行为。已通过 DSH 鉴权的浏览器
-可直接调用 Gateway 文件 API，访问范围由 Host 进程的文件权限决定；该契约同样适用于远程部署。
+live session 的 `cwd` 内；后续 `/uf` 与隧道请求不设置或读取插件会话 cookie，以兼容桌面壳删除
+Set-Cookie、替换请求 cookie 的转发行为，但代理要求所寻址的 fileKey 解码为某个 live session
+`cwd` 内已存在的 `.univer`（或已通过 Viewer 文档授权），隧道 `target` 必须是不含 dot segment
+与编码的规范路径。代理转发前剥离 `Origin`、`Referer`、`Sec-Fetch-*` 与 `Authorization`。
+Gateway 本身没有凭据，只监听 loopback，并拒绝 `Host` 不是本端口 loopback 地址（防 DNS rebinding）、
+`Origin` 不是 Gateway 自身 origin 或 `Sec-Fetch-Site` 为跨站的 HTTP 与 WebSocket 请求；Gateway
+不返回任何 CORS 头。
 `/univer-api` 与模型工具保留 session/workspace 校验。`computeFileState` 投影同源相对路径
 `/univer-viewer/?file=<key>`，`/univer-api/state` 在路由层为每个投影 URL 追加 sessionId。
 桌面 Viewer 以 `location.protocol === 'dsh-app:'` 区分运行环境，启动时从受 connection 门保护的
@@ -382,7 +386,7 @@ Tools Consumer 注册面向模型的领域工具，而不是一个透传 CLI 的
 
 每个工具有独立的参数 schema、结果 schema、超时/取消处理和纯 presentation。工具结果必须包含恢复 Client 预览目标所需的结构化文件、worktree 与 unit 标识，并进入 DSH 会话日志。领域失败使用 DSH 可持久化的稳定错误 code，并在模型可见文本中保留 `Error [CODE]`，使 Agent 不必解析自然语言即可选择恢复路径。Client 优先从 `tool/call` 与 `tool/result` 事件恢复目标，不依赖 bash 文本解析。
 
-`univer_status` 是发现文件状态与显式 Unit ID 的入口。所有内容工具要求显式 Unit ID，所有文件和输出路径都绑定当前 tool exec session 的 workspace，并在 Provider 边界再次验证。`univer_screenshot` 在读取文件前确认 attachment service、PNG 限制与当前模型图片输入能力，生成文件再次经过 workspace realpath 授权，再保存为持久 DSH image attachment；结构化文本保留恢复目标与图片元数据。`univer_print_pdf` 复用同一渲染源与 Render Machine，把 Sheet、Doc、Slide 或 Board 写入授权的 `.pdf` 路径，不支持 Base。`univer_resources` 的 cache root 只由 Provider 配置拥有，不向模型暴露；export 目录和每个实际输出文件都必须通过 workspace 授权。`ready` 提交修改等待审阅；同一任务需要继续修改时用 `reopen`。`merge` 与 `discard` 只有在用户明确要求时才可调用，并通过 `tools/pre-execute` 返回审批请求，不能由模型自行决定。
+`univer_status` 是发现文件状态与显式 Unit ID 的入口。所有内容工具要求显式 Unit ID，所有文件和输出路径都绑定当前 tool exec session 的 workspace，并在 Provider 边界再次验证。`univer_screenshot` 在读取文件前确认 attachment service、PNG 限制与当前模型图片输入能力，生成文件再次经过 workspace realpath 授权，再保存为持久 DSH image attachment；结构化文本保留恢复目标与图片元数据。`univer_print_pdf` 复用同一渲染源与 Render Machine，把 Sheet、Doc、Slide 或 Board 写入授权的 `.pdf` 路径，不支持 Base。`univer_resources` 的 cache root 只由 Provider 配置拥有，不向模型暴露；export 目录和每个实际输出文件都必须通过 workspace 授权。`ready` 提交修改等待审阅；同一任务需要继续修改时用 `reopen`。`merge` 与 `discard` 只有在用户明确要求时才可调用，并通过 `tools/pre-execute` 返回审批请求，不能由模型自行决定。`univer_execute` 的 Facade 代码在 Node.js Worker 中无沙箱执行、具有 Host 用户权限，因此默认同样通过 `tools/pre-execute` 请求审批；仅可信自动化部署可用 `executeApproval: false` 关闭。
 
 包内 `univer` Skill 描述完整编排顺序，sheet、doc、slide、base 与 board Skill 只在对应 Unit 工作时按需加载，Embed 与跨 Unit 公式各有 Topic Skill。内容以同版本 Univer CLI runtime Skills 为基线：只移除插件未开放的 command，并把 CLI command 调用替换为结构化 DSH Tool 或 Client 自动预览。Slide Skill 要求新页面主动使用 `univer_compile_svg`，结构检查后对每个变更页运行 `univer_lint`，最终逐页运行 `univer_screenshot`；其他 Unit Skill 使用其范围、分页、工作台或画布截图目标。需要图标、Logo、Emoji 或插画时先通过 `univer_resources` 查找和导出。不确定或可能随 SDK 变化的 API 必须通过 `univer_api` 查询。
 

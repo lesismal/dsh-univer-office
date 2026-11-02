@@ -1,12 +1,15 @@
 // Same-origin Viewer proxy (docs/viewer-same-origin-deployment.md): the real proxy handler in
 // front of a real Gateway. The DSH connection fence is a stub; DSH owns real Host/Origin checks.
-import { createServer, type Server } from 'node:http'
+import { createServer, request as httpRequest, type Server } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { startGateway, type GatewayHarness } from '../support/gateway.ts'
 import { closeServer, listen } from '../support/net.ts'
 
 const SESSION = 'viewer-proxy-session'
+const OUTSIDE_KEY = Buffer.from('/outside/elsewhere.univer').toString('base64url')
 
 describe('same-origin Viewer proxy', () => {
   let gateway: GatewayHarness
@@ -31,7 +34,8 @@ describe('same-origin Viewer proxy', () => {
         return started.gateway
       },
       sessions: {
-        get: (id: string) => (id === SESSION ? { header: { cwd: gateway.workspace } } : undefined)
+        get: (id: string) => (id === SESSION ? { header: { cwd: gateway.workspace } } : undefined),
+        list: () => [{ header: { cwd: gateway.workspace } }]
       },
       connection: { requestRejection: () => gateRejection }
     })
@@ -51,6 +55,54 @@ describe('same-origin Viewer proxy', () => {
     const mount = await fetch(`${gateway.origin}/univer-viewer/`)
     expect(mount.ok).toBe(true)
     expect(await mount.text()).toContain('<html')
+  })
+
+  it('refuses cross-origin and rebinding requests on the direct Gateway', async () => {
+    const descriptor = { accept: 'application/vnd.univer.collab-gateway+json;v=1' }
+    const direct = `${gateway.origin}/uf/${gateway.fileKey}`
+    expect((await fetch(direct, { headers: descriptor })).ok).toBe(true)
+    const foreign = await fetch(direct, {
+      headers: { ...descriptor, origin: 'https://attacker.example' }
+    })
+    expect(foreign.status).toBe(403)
+    expect(foreign.headers.get('access-control-allow-origin')).toBeNull()
+    const crossSite = await fetch(direct, {
+      headers: { ...descriptor, 'sec-fetch-site': 'cross-site' }
+    })
+    expect(crossSite.status).toBe(403)
+    const preflight = await fetch(direct, {
+      method: 'OPTIONS',
+      headers: { origin: gateway.origin, 'access-control-request-method': 'POST' }
+    })
+    expect(preflight.headers.get('access-control-allow-origin')).toBeNull()
+    const sameOrigin = await fetch(direct, { headers: { ...descriptor, origin: gateway.origin } })
+    expect(sameOrigin.ok).toBe(true)
+    const rebound = await new Promise<number | undefined>((resolve, reject) => {
+      const request = httpRequest(direct, { headers: { ...descriptor, host: 'attacker.example' } })
+      request.on('response', (response) => {
+        response.resume()
+        resolve(response.statusCode)
+      })
+      request.on('error', reject)
+      request.end()
+    })
+    expect(rebound).toBe(403)
+    const foreignSocket = await new Promise<number | string>((resolve) => {
+      const client = new WebSocket(`${direct.replace(/^http/u, 'ws')}/events`, {
+        origin: 'https://attacker.example'
+      })
+      client.on('unexpected-response', (_request, response) => {
+        response.resume()
+        client.terminate()
+        resolve(response.statusCode ?? 'no status')
+      })
+      client.on('open', () => {
+        client.terminate()
+        resolve('opened')
+      })
+      client.on('error', () => resolve('error'))
+    })
+    expect(foreignSocket).toBe(403)
   })
 
   it('gates the Viewer document and transport config behind the connection fence', async () => {
@@ -117,6 +169,43 @@ describe('same-origin Viewer proxy', () => {
     })
     expect(descriptor.ok).toBe(true)
     expect((await descriptor.json()).protocolVersion).toBe(1)
+  })
+
+  it('refuses /uf files outside every live session workspace', async () => {
+    const outside = Buffer.from(join(tmpdir(), 'outside-every-session.univer')).toString(
+      'base64url'
+    )
+    expect((await fetch(`${proxyOrigin}/uf/${outside}/worktrees`)).status).toBe(403)
+    expect((await fetch(`${proxyOrigin}/uf/${outside}`, { method: 'POST' })).status).toBe(403)
+  })
+
+  it('does not forward browser provenance headers to the fenced Gateway', async () => {
+    const api = await fetch(`${ufBase}/worktrees`, {
+      headers: { origin: 'https://dsh.example', 'sec-fetch-site': 'cross-site' }
+    })
+    expect(api.ok).toBe(true)
+  })
+
+  it.each([
+    ['dot segments', (key: string) => `/uf/${key}/../${OUTSIDE_KEY}/events`],
+    ['an encoded dot segment', (key: string) => `/uf/${key}/%2e%2e/${OUTSIDE_KEY}/events`]
+  ])('refuses tunnel targets with %s', async (_label, target) => {
+    const outcome = await new Promise<number | string>((resolve) => {
+      const client = new WebSocket(
+        `${proxyOrigin}/univer-viewer/ws?target=${encodeURIComponent(target(gateway.fileKey))}`
+      )
+      client.on('unexpected-response', (_request, response) => {
+        response.resume()
+        client.terminate()
+        resolve(response.statusCode ?? 'no status')
+      })
+      client.on('open', () => {
+        client.terminate()
+        resolve('opened')
+      })
+      client.on('error', () => resolve('error'))
+    })
+    expect(outcome).toBe(403)
   })
 
   it.each([401, 403])('keeps the connection fence on /uf (%i)', async (rejection) => {

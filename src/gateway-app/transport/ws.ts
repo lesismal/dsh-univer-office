@@ -14,6 +14,8 @@ const DEFAULT_EVENTS_HEARTBEAT_MS = 15_000
 export interface AttachGatewayWebSocketsOptions {
   /** Lifecycle-events ping interval; a connection missing two pongs is terminated. */
   readonly eventsHeartbeatMs?: number
+  /** Browser fence; an untrusted upgrade is refused before any file is resolved. */
+  readonly isTrusted?: (req: IncomingMessage) => boolean
 }
 
 type ResolvedUpgrade =
@@ -39,6 +41,11 @@ export function attachGatewayWebSockets(
   const heartbeatMs = options.eventsHeartbeatMs ?? DEFAULT_EVENTS_HEARTBEAT_MS
 
   server.on('upgrade', (req, socket, head) => {
+    if (options.isTrusted !== undefined && !options.isTrusted(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nconnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
     const resolved = resolveUpgrade(req, manager)
     if (resolved === null) {
       socket.destroy()

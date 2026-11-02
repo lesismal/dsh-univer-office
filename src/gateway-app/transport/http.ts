@@ -185,25 +185,15 @@ export function createRequestListener(
   manager: UniverfileManager
 ): (req: IncomingMessage, res: ServerResponse) => void {
   return (req: IncomingMessage, res: ServerResponse): void => {
-    applyCors(req, res)
+    // No CORS: only same-origin callers (the Gateway's own Viewer, the Host's proxy, and
+    // Workers) may use the Gateway, so preflights are refused instead of granted.
     if ((req.method ?? 'GET') === 'OPTIONS') {
-      res.writeHead(204)
+      res.writeHead(405, { allow: 'GET, POST' })
       res.end()
       return
     }
     void dispatch(manager, req, res)
   }
-}
-
-function applyCors(req: IncomingMessage, res: ServerResponse): void {
-  res.setHeader('access-control-allow-origin', req.headers.origin ?? '*')
-  res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
-  res.setHeader(
-    'access-control-allow-headers',
-    req.headers['access-control-request-headers'] ?? 'content-type, x-user-id, authorization'
-  )
-  res.setHeader('access-control-expose-headers', 'content-type, content-disposition')
-  res.setHeader('access-control-max-age', '86400')
 }
 
 async function dispatch(

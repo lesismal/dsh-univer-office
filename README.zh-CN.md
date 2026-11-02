@@ -213,6 +213,7 @@ DSH 会自动选择这些工具，日常使用不需要手动调用。
 | `resourceDownloadTimeoutMs` | `15000` | 单个 SVG 资源下载超时 |
 | `resourceOperationTimeoutMs` | `120000` | 一次资源库工具操作的总超时 |
 | `tools` | `true` | 启用 Agent 编辑能力 |
+| `executeApproval` | `true` | 运行 `univer_execute` 的 Facade 代码前请求审批（代码以当前用户权限无沙箱执行） |
 | `skills` | `true` | 启用内置任务指引 |
 | `telemetry` | `true` | 发送匿名产品遥测 |
 
