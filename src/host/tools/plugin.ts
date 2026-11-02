@@ -46,6 +46,13 @@ export function apply(ctx: Context, config: ResolvedConfig): void {
   ctx.tools.register(withUniverErrorContent(apiTool(ctx)))
   ctx.tools.register(withUniverErrorContent(resourcesTool(ctx, config.resourceOperationTimeoutMs)))
   ctx.on('tools/pre-execute', (exec, next) => {
+    if (exec.name === 'univer_execute' && config.executeApproval) {
+      return Promise.resolve({
+        kind: 'ask',
+        reason:
+          'Univer Facade code runs unsandboxed with your user privileges and can access files, network, and processes.'
+      })
+    }
     if (exec.name !== 'univer_worktree' || !isRecord(exec.arguments)) return next()
     const action = exec.arguments.action
     if (action !== 'merge' && action !== 'discard') return next()

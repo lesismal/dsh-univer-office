@@ -260,7 +260,9 @@ describe('browser routes and tools', () => {
       gatewayPort: 65_535,
       gatewayStartupTimeoutMs: 50,
       gatewayRequestTimeoutMs: 50,
-      skills: false
+      skills: false,
+      // Validation cases below exercise the tool body; the approval gate has its own test.
+      executeApproval: false
     })
     owner = {
       ctx: toolContext,
@@ -454,6 +456,143 @@ describe('browser routes and tools', () => {
       ['univer_status', () => ({ file }), 'GATEWAY_UNAVAILABLE']
     ] as const)('%s fails with %s', async (name, args, code) => {
       expectToolError(await execute(name, args()), code)
+    })
+
+    it('asks for approval before running Facade code by default', async () => {
+      const guarded = new Context()
+      await guarded.plugin(SystemPrompt)
+      await guarded.plugin(ToolRuntime)
+      await guarded.plugin(plugin, {
+        gatewayPort: 65_535,
+        gatewayStartupTimeoutMs: 50,
+        gatewayRequestTimeoutMs: 50,
+        skills: false
+      })
+      try {
+        const result = await guarded.tools.execute({
+          signal: new AbortController().signal,
+          callId: ToolCallId(`host-execute-approval-${Math.random()}`),
+          name: 'univer_execute',
+          arguments: { file, code: 'return true', unitId: 'unit-1', worktreeId: WORKTREE },
+          agent: { ...owner, ctx: guarded }
+        })
+        expect(result.isError).toBe(true)
+        expect(toolText(result)).toContain('unsandboxed')
+      } finally {
+        await guarded.registry.delete(plugin)
+      }
+    })
+
+    it.runIf(canEnforcePermissionDenied)(
+      'keeps a permission failure distinct from a missing path',
+      async () => {
+        expect(
+          await json(
+            `/univer-api/state?file=${encodeURIComponent(lockedFile)}&sessionId=${SESSION}`
+          )
+        ).toMatchObject({ status: 403, body: { code: 'FILE_PERMISSION_DENIED' } })
+      }
+    )
+
+    it('rejects an unknown action and an unknown route', async () => {
+      const invalid = await fetch(`${origin}/univer-api/worktree-action`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'destroy', file, sessionId: SESSION, worktreeId: WORKTREE })
+      })
+      expect(invalid.status).toBe(400)
+      expect((await fetch(`${origin}/univer-api/unknown`)).status).toBe(404)
+    })
+  })
+
+  describe('tool definitions', () => {
+    it('distinguishes unknown-name find from known-name show in univer_api', () => {
+      const description = toolContext.tools.get('univer_api')?.description
+      expect(description).toContain('Use find when no relevant class or API label is known')
+      expect(description).toContain('show the class itself')
+      expect(description).toContain('Each query runs independently')
+      expect(description).toContain('find does not interpret intent')
+    })
+
+    it('exposes Base and Board inspection in univer_inspect', () => {
+      const description = toolContext.tools.get('univer_inspect')?.description
+      expect(description).toContain('Base and Board default to selector-free overviews')
+      expect(description).toContain('elementIds reads one or more Board elements')
+    })
+
+    it('documents returned values in univer_execute', () => {
+      const description = toolContext.tools.get('univer_execute')?.description
+      expect(description).toContain('Explicitly return readback values')
+      expect(description).toContain('bare expressions and console.log do not populate value')
+    })
+  })
+
+  describe('tools without a Gateway', () => {
+    it.each([
+      [{ action: 'find', queries: ['insertImage'], unit: 'board', limit: 3 }, 'FBoard.insertImage'],
+      [{ action: 'find', queries: ['getSchema'], unit: 'base', limit: 3 }, 'FBase.getSchema']
+    ])('answers univer_api %o', async (args, label) => {
+      const result = await execute('univer_api', args)
+      expect(result.isError).toBe(false)
+      expect(toolText(result)).toContain(label)
+    })
+
+    it('lists resource registries', async () => {
+      const result = await execute('univer_resources', { action: 'registries' })
+      expect(result.isError).toBe(false)
+      expect(toolText(result)).toContain('"operation":"resources"')
+    })
+  })
+
+  describe('structured tool failures', () => {
+    it.each([
+      [
+        'univer_execute',
+        () => ({ file, codeFile, unitId: 'unit-1', worktreeId: WORKTREE }),
+        'GATEWAY_UNAVAILABLE'
+      ],
+      [
+        'univer_execute',
+        () => ({ file, code: 'return true', codeFile, unitId: 'unit-1', worktreeId: WORKTREE }),
+        'INVALID_EXECUTION_SOURCE'
+      ],
+      [
+        'univer_inspect',
+        () => ({ file, unitId: 'unit-1', range: 'A1:B2', elementIds: ['shape-1'] }),
+        'INSPECTION_INPUT_INVALID'
+      ],
+      [
+        'univer_inspect',
+        () => ({ file, unitId: 'unit-1', elementIds: [] }),
+        'INSPECTION_INPUT_INVALID'
+      ],
+      [
+        'univer_screenshot',
+        () => ({ file, unitId: 'unit-1', output: 'screenshots', pages: [1] }),
+        'GATEWAY_UNAVAILABLE'
+      ],
+      [
+        'univer_print_pdf',
+        () => ({ file, unitId: 'unit-1', output: 'report.pdf' }),
+        'GATEWAY_UNAVAILABLE'
+      ],
+      ['univer_status', () => ({ file: 'missing.univer' }), 'INVALID_FILE_PATH'],
+      ['univer_status', () => ({ file }), 'GATEWAY_UNAVAILABLE']
+    ] as const)('%s fails with %s', async (name, args, code) => {
+      expectToolError(await execute(name, args()), code)
+    })
+
+    it('PROBE', async () => {
+      const r = await execute('univer_execute', {
+        file,
+        code: 'return 1',
+        unitId: 'unit-1',
+        worktreeId: WORKTREE
+      })
+      ;(await import('node:fs')).writeFileSync(
+        '/private/tmp/claude-502/-Users-lesismal-Deepseek-Harness/5c95e549-47c4-41fa-97a0-c1208c8bc66a/scratchpad/probe.json',
+        JSON.stringify(r)
+      )
     })
 
     it.runIf(canEnforcePermissionDenied)(

@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import sirv from 'sirv'
 import { VIEWER_BASE } from '../shared/wire/viewer.js'
 import { createRequestListener } from './transport/http.js'
+import { isTrustedGatewayRequest } from './transport/request-fence.js'
 import { attachGatewayWebSockets } from './transport/ws.js'
 import type { UniverfileManagerOptions } from './univerfile-manager.js'
 import { UniverfileManager } from './univerfile-manager.js'
@@ -39,12 +40,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
   }
   const manager = new UniverfileManager(managerOptions)
   const apiRequestListener = createRequestListener(manager)
+  // The bound port is known only after listen; no request can arrive before then.
+  let boundPort = -1
+  const isTrusted = (req: http.IncomingMessage): boolean => isTrustedGatewayRequest(req, boundPort)
   const httpServer = http.createServer(
-    createGatewayRequestListener(apiRequestListener, options.viewAssetsRoot)
+    createGatewayRequestListener(apiRequestListener, options.viewAssetsRoot, isTrusted)
   )
-  const wss = attachGatewayWebSockets(httpServer, manager)
+  const wss = attachGatewayWebSockets(httpServer, manager, { isTrusted })
 
   const port = await listen(httpServer, options.port ?? 8000)
+  boundPort = port
 
   return {
     manager,
@@ -81,11 +86,17 @@ async function assertViewAssetsRoot(viewAssetsRoot: string): Promise<void> {
 
 function createGatewayRequestListener(
   apiRequestListener: (req: http.IncomingMessage, res: http.ServerResponse) => void,
-  viewAssetsRoot: string | undefined
+  viewAssetsRoot: string | undefined,
+  isTrusted: (req: http.IncomingMessage) => boolean
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
   const serveViewAsset =
     viewAssetsRoot === undefined ? undefined : createViewAssetHandler(viewAssetsRoot)
   return (req, res): void => {
+    if (!isTrusted(req)) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('Forbidden')
+      return
+    }
     const url = new URL(req.url ?? '/', 'http://localhost')
     let pathname = url.pathname
     // The Viewer is mounted under one base on every origin (direct Gateway access and the

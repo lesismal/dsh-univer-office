@@ -213,6 +213,7 @@ The defaults are designed for local use: the service starts at port `9080`. If t
 | `resourceDownloadTimeoutMs` | `15000` | Timeout for one SVG resource download |
 | `resourceOperationTimeoutMs` | `120000` | Overall timeout for one resource-library tool operation |
 | `tools` | `true` | Enable agent editing capabilities |
+| `executeApproval` | `true` | Ask before running Facade code with `univer_execute` (it runs unsandboxed with your user privileges) |
 | `skills` | `true` | Enable bundled task guidance |
 | `telemetry` | `true` | Send anonymous product telemetry |
 

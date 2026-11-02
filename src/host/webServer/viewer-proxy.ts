@@ -3,6 +3,7 @@ import http from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { SessionStore } from '@deepseek-ai/dsh-session'
+import { resolveExistingUniverPath } from '../service/workspace.ts'
 import type { ViewerRuntimeConfig } from '../../shared/wire/viewer.ts'
 import { VIEWER_BASE, VIEWER_RUNTIME_CONFIG, VIEWER_WS_TUNNEL } from '../../shared/wire/viewer.ts'
 import { resolveAuthorizedFile } from './session-scope.ts'
@@ -42,6 +43,14 @@ export function createViewerProxy(options: ViewerProxyOptions): ViewerProxy {
   const { gatewayOrigin, sessions, connection } = options
   const wss = new WebSocketServer({ noServer: true })
   const bridges = new Set<() => void>()
+  // File keys already proven to address an existing `.univer` inside a live session workspace.
+  const authorizedKeys = new Set<string>()
+  const isKeyAuthorized = async (key: string): Promise<boolean> => {
+    if (authorizedKeys.has(key)) return true
+    if (!(await isFileInAnySessionScope(decodeFileKey(key), sessions))) return false
+    authorizedKeys.add(key)
+    return true
+  }
 
   const httpHandler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const rejection = connection.requestRejection(req)
@@ -92,11 +101,21 @@ export function createViewerProxy(options: ViewerProxyOptions): ViewerProxy {
         reject(res, 403)
         return
       }
+      authorizedKeys.add(file)
     } else if (pathname.startsWith(`${VIEWER_BASE}/`)) {
       // Static Viewer assets are public code once the browser fence passed; no scope check.
-    } else if (fileKeyOfUfPath(pathname) === null) {
-      reject(res, url.pathname === '/uf' || url.pathname.startsWith('/uf/') ? 403 : 404)
-      return
+    } else {
+      // Gateway file API: the addressed file must live inside a live DSH session workspace, so an
+      // authenticated browser cannot reach arbitrary `.univer` files on the Host.
+      const fileKey = fileKeyOfUfPath(pathname)
+      if (fileKey === null) {
+        reject(res, url.pathname === '/uf' || url.pathname.startsWith('/uf/') ? 403 : 404)
+        return
+      }
+      if (!(await isKeyAuthorized(fileKey))) {
+        reject(res, 403)
+        return
+      }
     }
     await forwardToGateway(req, res, gatewayOrigin)
   }
@@ -128,12 +147,26 @@ export function createViewerProxy(options: ViewerProxyOptions): ViewerProxy {
       fail(403)
       return
     }
-    const fileKey = fileKeyOfUfPath(target)
+    // Reject dot segments, encodings, queries, or fragments that would make the forwarded URL
+    // resolve to a different Gateway path than the one checked here.
+    let normalized: string
+    try {
+      normalized = new URL(target, 'http://localhost').pathname
+    } catch {
+      fail(403)
+      return
+    }
+    const fileKey = normalized === target ? fileKeyOfUfPath(target) : null
     if (fileKey === null) {
       fail(403)
       return
     }
-    bridgeTunnel(req, socket, head, target, gatewayOrigin)
+    void (async () => {
+      if (await isKeyAuthorized(fileKey)) bridgeTunnel(req, socket, head, target, gatewayOrigin)
+      else fail(403)
+    })().catch(() => {
+      socket.destroy()
+    })
   }
 
   const bridgeTunnel = (
@@ -254,7 +287,10 @@ async function forwardToGateway(
   })
 }
 
-/** Drop hop-by-hop, WebSocket-handshake, and cookie headers; `host` is re-derived from the target. */
+/**
+ * Drop hop-by-hop, WebSocket-handshake, credential, and browser-provenance headers; `host` is
+ * re-derived from the target.
+ */
 function forwardRequestHeaders(headers: IncomingMessage['headers']): IncomingMessage['headers'] {
   const forwarded: Record<string, string | string[] | undefined> = {}
   for (const [name, value] of Object.entries(headers)) {
@@ -264,6 +300,12 @@ function forwardRequestHeaders(headers: IncomingMessage['headers']): IncomingMes
       lower === 'host' ||
       lower === 'connection' ||
       lower === 'cookie' ||
+      lower === 'authorization' ||
+      // Browser provenance headers describe the DSH origin, which the proxy already fenced; the
+      // loopback Gateway refuses foreign origins, so they must not reach it.
+      lower === 'origin' ||
+      lower === 'referer' ||
+      lower.startsWith('sec-fetch-') ||
       lower === 'upgrade' ||
       lower.startsWith('sec-websocket-')
     ) {
@@ -311,6 +353,23 @@ async function isFileInSessionScope(
   } catch {
     return false
   }
+}
+
+/** Gateway file API calls may address any existing `.univer` inside some live session workspace. */
+async function isFileInAnySessionScope(path: string, sessions: SessionStore): Promise<boolean> {
+  // Older DSH stores may not expose `list()`; then only Viewer-document-authorized keys pass.
+  if (typeof sessions.list !== 'function') return false
+  for (const session of sessions.list()) {
+    const cwd = session.header.cwd
+    if (cwd === undefined) continue
+    try {
+      await resolveExistingUniverPath(cwd, path)
+      return true
+    } catch {
+      // Not inside this workspace; try the next live session.
+    }
+  }
+  return false
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {

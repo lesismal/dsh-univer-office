@@ -53,12 +53,13 @@ DSH WebServer 的 upgrade 注册只支持精确路径，而 Gateway 的 WS 端�
    代理解码 fileKey 并确认该路径落在该 live session 的 `cwd` 内。`/univer-api` 继续执行
    session/workspace 校验。
 
-后续 `/uf` API 与 WS 隧道只复用 DSH 的浏览器鉴权，不设置或读取插件会话 cookie，也不重复
-session/workspace 校验。DSH 桌面壳会删除响应的 Set-Cookie，并把请求 cookie 替换为自身的
+后续 `/uf` API 与 WS 隧道复用 DSH 的浏览器鉴权，不设置或读取插件会话 cookie，但代理要求
+所寻址的文件是某个 live session `cwd` 内已存在的 `.univer`（或已通过 Viewer 文档授权）。DSH 桌面壳会删除响应的 Set-Cookie，并把请求 cookie 替换为自身的
 鉴权 cookie，因此插件 cookie 不能作为这些请求的前置条件。旧版本残留的插件 cookie 被忽略。
 
-已通过 DSH 鉴权的浏览器可构造 `/uf/<key>` 并访问 Host 进程有权打开的任意 `.univer` 文件，
-包括内容写入与 worktree 操作；这同样适用于远程部署。Gateway 自身的业务校验与 comb
+已通过 DSH 鉴权的浏览器可构造 `/uf/<key>` 访问任一 live session workspace 内的 `.univer` 文件，
+包括内容写入与 worktree 操作；这同样适用于远程部署。直连 loopback Gateway 的浏览器请求只在
+同源（Gateway 自身 origin）时被接受，跨站 `Origin`/`Sec-Fetch-Site` 与非 loopback `Host` 一律 403。Gateway 自身的业务校验与 comb
 一次性 sessionTicket 校验保持不变。sessionId 是文档范围句柄而非身份凭据，本插件不提供
 多租户文件权限体系。
 

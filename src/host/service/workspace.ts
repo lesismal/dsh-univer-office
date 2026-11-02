@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { UniverError } from './errors.ts'
 import {
@@ -109,10 +109,27 @@ async function canonicalizePotentialPath(candidate: string): Promise<string> {
       return resolve(canonicalAncestor, relative(ancestor, candidate))
     } catch (error) {
       if (!isMissingPathError(error)) throw error
+      // A dangling symlink cannot be canonicalized, yet writing through it would land wherever
+      // it points, possibly outside the workspace.
+      if (await pathEntryExists(ancestor)) {
+        throw new UniverError('path contains a dangling symbolic link', 'INVALID_FILE_PATH', {
+          cause: error
+        })
+      }
       const parent = dirname(ancestor)
       if (parent === ancestor) throw new Error(`no existing ancestor for ${candidate}`)
       ancestor = parent
     }
+  }
+}
+
+async function pathEntryExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if (isMissingPathError(error)) return false
+    throw error
   }
 }
 

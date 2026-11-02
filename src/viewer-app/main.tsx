@@ -13,6 +13,7 @@ import { initializeDesktopTransport } from './core/desktop-transport.ts'
 import { applyDocumentLang, resolveLang, setLang, t } from './i18n'
 import { App } from './ui/app'
 import { BootCard, FatalNotice } from './ui/boot'
+import { escapeHtml } from './ui/modals'
 
 const root = document.getElementById('app')
 if (!root) {
@@ -82,7 +83,8 @@ async function bootstrap(): Promise<void> {
           title={t().boot.notFoundTitle}
           body={t().boot.notFoundBody}
           pre={selectedFile}
-          hint={t().boot.notFoundHint(`univer new ${selectedFile}`)}
+          // `selectedFile` comes from the URL and the hint renders as HTML.
+          hint={t().boot.notFoundHint(escapeHtml(`univer new ${selectedFile}`))}
         />
       )
       return
